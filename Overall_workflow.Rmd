@@ -1,0 +1,234 @@
+---
+title: "Overall workflow for proteasome subunit analysis, Maria's paper"
+output: html_document
+date: "2025-10-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+######### libraries ##########
+##############################
+```{r}
+## libraries
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(openxlsx)
+library(knitr)
+library(SeuratWrappers)
+library(hdf5r)
+library(reticulate)
+library(data.table)
+library(Matrix)
+library(clustree)
+library(data.table)
+library(rstatix)
+library(ggpubr)
+```
+
+
+### Point1:
+"All proteasome subunits" expression comparing non-tumor, MB and GBM (Griesinger dataset from GlioVis). I have the plot done with only PSMB5, but we thought it might be good to have the same plot combining all proteasome subunits.
+
+```{r}
+## loadding the Griesinger dataset
+pheno <- read.table("Griesinger/data/2026-03-09_Griesinger_pheno.txt", header = T )
+expression <- fread("Griesinger/data/2026-03-09_Griesinger_expression.txt", header = T )
+
+## Subsetting non-tumor samples, MB sample and GMB samples
+pheno_sub<- pheno |> filter (Histology %in% c('Non-tumor', 'Medulloblastoma'))
+expr_sub<- expression[expression$Sample %in% pheno_sub$Sample,]
+str(expr_sub)
+
+## Obtaining Thompson signature..
+##### ##########################
+proteasome_genes <- c(
+  "PSMA1", "PSMA2", "PSMA3", "PSMA4", "PSMA5", "PSMA6", "PSMA7",
+  "PSMB1", "PSMB2", "PSMB3", "PSMB4", "PSMB5", "PSMB6", "PSMB7", "PSMB8", "PSMB9",
+  "PSMC1", "PSMC2", "PSMC3", "PSMC4", "PSMC5", "PSMC6",
+  "PSMD1", "PSMD2", "PSMD3", "PSMD4", "PSMD5", "PSMD6", "PSMD7", "PSMD8", "PSMD9",
+  "PSMD10", "PSMD11", "PSMD12", "PSMD13", "PSMD14",
+  "PSME1", "PSME2", "PSME3") 
+
+expr_proteasome <- expr_sub[, c("Sample", intersect(proteasome_genes, colnames(expr_sub))), with = FALSE] # 35/39
+unique(colnames(expr_proteasome))
+
+### ggplot of mean expression per group
+expr_proteasome$histology<- pheno_sub$Histology
+str(expr_proteasome)
+
+proteasome_cols <- setdiff(colnames(expr_proteasome), c("Sample", "histology"))
+expr_proteasome[, proteasome_mean := rowMeans(.SD, na.rm = TRUE), .SDcols = proteasome_cols]
+
+
+ggplot(expr_proteasome, aes(x = histology, y = proteasome_mean)) +
+  geom_violin(trim = FALSE) +
+  geom_jitter(width = 0.15, size = 2, alpha = 0.7) +
+  labs(
+    x = "Histology",
+    y = "Mean proteasome expression",
+    title = "Proteasome mean expression by histology"
+  ) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+### Two groups on this, so wilcoxox test 
+# Do the mean proteasome expression scores differ between histology groups?
+# Do group means differ after accounting for variability between patients?
+
+unique(expr_proteasome$histology)
+expr_proteasome$histology <- factor(expr_proteasome$histology,levels = c("Non-tumor", "Medulloblastoma"))
+expr_proteasome[, .(
+  n = .N,
+  mean = mean(proteasome_mean, na.rm = TRUE),
+  sd = sd(proteasome_mean, na.rm = TRUE),
+  median = median(proteasome_mean, na.rm = TRUE),
+  IQR = IQR(proteasome_mean, na.rm = TRUE)
+), by = histology]
+
+expr_proteasome$histology <- factor(
+  expr_proteasome$histology,
+  levels = c("Non-tumor", "Medulloblastoma")
+)
+
+#stat.test <- aov(proteasome_mean ~ histology, data = expr_proteasome) %>% tukey_hsd() # ANOVA, tukey posthoc
+
+## Include results of ANOVA posthoc in the graph 
+p<- ggpubr::ggviolin(expr_proteasome, x = "histology", y = "proteasome_mean",
+                 palette = "jco", color = "histology", add = "jitter", legend = "right") +
+  labs(
+    x = NULL,
+    y = "Mean Log2FC expression"
+  ) +
+  theme(
+    axis.text.x = element_text(size = 14 ),
+    axis.text.y = element_text(size = 14 ),
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_blank()
+  ) + RotatedAxis()
+
+pdf("Griesinger/Mean_proteasome_exp.pdf", width = 7, height = 5)
+p + stat_compare_means()
+dev.off()
+
+#write.csv(stat.test,  "Griesinger/ANOVA_wilcoxox_stats.csv")
+write.csv(expr_proteasome,  "Griesinger/proteasome_expression.csv")
+```
+
+
+### Point2:
+"All proteasome subunits" expression comparing MB subgroups (I was using Northcott dataset to do the plot for PSMB5 expression level).
+```{r}
+## loadding the Griesinger dataset
+pheno <- read.table("Cavalli/data/2026-03-09_Cavalli_pheno.txt", header = T )
+expression <- fread("Cavalli/data/2026-03-09_Cavalli_expression.txt", header = T )
+
+## Subsetting non-tumor samples, MB sample and GMB samples
+all(pheno$Sample == expression$Sample)
+expression$Subgroup<- pheno$Subgroup
+
+## Obtaining Thompson signature..
+##### ##########################
+proteasome_genes <- c(
+  "PSMA1", "PSMA2", "PSMA3", "PSMA4", "PSMA5", "PSMA6", "PSMA7",
+  "PSMB1", "PSMB2", "PSMB3", "PSMB4", "PSMB5", "PSMB6", "PSMB7", "PSMB8", "PSMB9",
+  "PSMC1", "PSMC2", "PSMC3", "PSMC4", "PSMC5", "PSMC6",
+  "PSMD1", "PSMD2", "PSMD3", "PSMD4", "PSMD5", "PSMD6", "PSMD7", "PSMD8", "PSMD9",
+  "PSMD10", "PSMD11", "PSMD12", "PSMD13", "PSMD14",
+  "PSME1", "PSME2", "PSME3") 
+
+
+expr_proteasome <- expression[, c("Sample", intersect(proteasome_genes, colnames(expression))), with = FALSE] #39/39
+unique(colnames(expr_proteasome))
+
+### ggplot of mean expression per group
+all(pheno$Sample == expr_proteasome$Sample)
+colnames(expr_proteasome)
+expr_proteasome$Subgroup<- pheno$Subgroup
+str(expr_proteasome)
+
+proteasome_cols <- setdiff(colnames(expr_proteasome), c("Sample", "Subgroup"))
+expr_proteasome[, proteasome_mean := rowMeans(.SD, na.rm = TRUE), .SDcols = proteasome_cols]
+
+
+ggplot(expr_proteasome, aes(x = Subgroup, y = proteasome_mean)) +
+  geom_violin(trim = FALSE) +
+  geom_jitter(width = 0.15, size = 2, alpha = 0.7) +
+  labs(
+    x = "Histology",
+    y = "Mean proteasome expression",
+    title = "Proteasome mean expression by Subgroup"
+  ) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+### Anova test with Tukey posthoc correction
+# Do the mean proteasome expression scores differ between histology groups?
+# Do group means differ after accounting for variability between patients?
+
+unique(expr_proteasome$Subgroup)
+expr_proteasome[, .(
+  n = .N,
+  mean = mean(proteasome_mean, na.rm = TRUE),
+  sd = sd(proteasome_mean, na.rm = TRUE),
+  median = median(proteasome_mean, na.rm = TRUE),
+  IQR = IQR(proteasome_mean, na.rm = TRUE)
+), by = Subgroup]
+
+unique(expr_proteasome$Subgroup)
+expr_proteasome$Subgroup <- factor(
+  expr_proteasome$Subgroup,
+  levels = c("SHH" ,"Group3", "Group4", "WNT")
+)
+
+stat.test <- aov(proteasome_mean ~ Subgroup, data = expr_proteasome) %>% tukey_hsd() # ANOVA, tukey posthoc
+
+## Include results of ANOVA posthoc in the graph 
+pdf("Cavalli/Mean_proteasome_exp.pdf", width = 7, height = 5)
+ggpubr::ggviolin(expr_proteasome, x = "Subgroup", y = "proteasome_mean",
+                 palette = "jco", color = "Subgroup", add = "jitter", legend = "right") +
+  stat_pvalue_manual(
+    stat.test, label = "p.adj.signif", 
+    y.position = c(9.5,9.7,9.9,10.1,10.3,10.5)
+      ) +
+  labs(
+    x = NULL,
+    y = "Mean LogFC proteasome expression"
+  ) +
+  theme(
+    axis.text.x = element_text(size = 14 ),
+    axis.text.y = element_text(size = 14 ),
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_blank()
+  ) + RotatedAxis()
+dev.off()
+
+write.csv(stat.test,  "Cavalli/ANOVA_tukey_posthoc_stats.csv")
+write.csv(expr_proteasome,  "Cavalli/proteasome_expression.csv")
+
+
+expr_proteasome[, .(
+  n = .N,
+  mean = mean(proteasome_mean, na.rm = TRUE),
+  sd = sd(proteasome_mean, na.rm = TRUE),
+  median = median(proteasome_mean, na.rm = TRUE)
+), by = Subgroup][order(-mean)]
+```
+
+
+
+
+
+
+
+
+
+
+
+

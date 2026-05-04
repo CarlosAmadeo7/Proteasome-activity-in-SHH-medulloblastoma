@@ -1,0 +1,824 @@
+---
+title: "Proteasome overall workflow for Riemondy KA dataset"
+output: html_document
+date: "2025-10-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+######### libraries ##########
+##############################
+```{r}
+## libraries
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+library(openxlsx)
+library(knitr)
+library(SeuratWrappers)
+library(hdf5r)
+library(reticulate)
+library(data.table)
+library(Matrix)
+library(clustree)
+```
+
+## loading full object 
+```{r}
+load("C:/Users/amade/Documents/CD15_project/Riemondy_KA_dataset/output/Processed_FullObject.RData")
+```
+
+```{r}
+colnames(obj@meta.data)
+DimPlot(obj, group.by = "subgroup")
+```
+# Proteasome signture from Thompson 
+#--------------------------------------------
+```{r}
+library(AUCell)
+DefaultAssay(obj)<- "RNA"
+############ Thompson 
+proteasome_genes <- c(
+  "PSMA1", "PSMA2", "PSMA3", "PSMA4", "PSMA5", "PSMA6", "PSMA7",
+  "PSMB1", "PSMB2", "PSMB3", "PSMB4", "PSMB5", "PSMB6", "PSMB7", "PSMB8", "PSMB9",
+  "PSMC1", "PSMC2", "PSMC3", "PSMC4", "PSMC5", "PSMC6",
+  "PSMD1", "PSMD2", "PSMD3", "PSMD4", "PSMD5", "PSMD6", "PSMD7", "PSMD8", "PSMD9",
+  "PSMD10", "PSMD11", "PSMD12", "PSMD13", "PSMD14",
+  "PSME1", "PSME2", "PSME3") 
+
+## Obtaing the raw counts from the OPC object
+counts<- GetAssayData(obj, slot = "counts")
+### celrankings 
+cell_rankings<- AUCell_buildRankings(counts)
+## Calculate AUCell for each cell
+list<- list(PROTEASOME =proteasome_genes)
+cells_AUC<- AUCell_calcAUC(list, cell_rankings)
+
+pdf("RiemondyKA/Overall_proteasome_Thresholds.pdf")
+cells_assignment<- AUCell_exploreThresholds(cells_AUC, plotHist = T, assign = T)
+invisible(dev.off())
+
+auc_mtx <- t(getAUC(cells_AUC))
+colnames(auc_mtx) <- paste0(colnames(auc_mtx), "_AUC")
+obj <- AddMetaData(obj, auc_mtx)
+View(obj@meta.data)
+
+feat <- "PROTEASOME_AUC"
+thr  <- 0.18
+col_bin <- paste0(feat, "_pos")
+
+obj[[col_bin]] <- obj[[feat]] >= thr
+#View(OPCs@meta.data)
+p<-DimPlot(
+  obj,
+  group.by = col_bin,
+  cols = c("FALSE" = "lightblue", "TRUE" = "#B2182B")
+)
+p
+DimPlot(obj, group.by = "tumor_subpopulation", label = TRUE)
+DimPlot(obj, group.by = "subgroup", label = TRUE)
+DimPlot(obj, group.by = "coarse_cell_type", label = TRUE)
+DimPlot(obj, group.by = "Phase", label = TRUE)
+DimPlot(obj, group.by = "PROTEASOME_AUC_pos", label = TRUE, cols = c("gray90", "firebrick"))
+
+save(obj, file = "RiemondyKA/Processed_FullObject.RData")
+```
+
+```{r ggscatterplots for CD15+ cells and Phase}
+threshold = 0.18
+cor(obj$PROTEASOME_AUC > threshold, obj$G2M.Score, use="complete.obs", method="spearman")
+cor(obj$PROTEASOME_AUC > threshold, obj$S.Score, use="complete.obs", method="spearman")
+
+## Table of G2M and S scores 
+tab <- table(PROTEASOME = obj$PROTEASOME_AUC > threshold, Phase = obj$Phase)
+tab
+chisq.test(tab)
+#fisher.test(tab)
+
+## Viz
+md <- obj@meta.data
+library(ggplot2)
+pdf("RiemondyKA/PROTEASOME_pos_cells_Phase.pdf", height = 5)
+ggplot(md, aes(S.Score, G2M.Score)) +
+  geom_point(aes(color = Phase), alpha = 0.20, size = 0.5) +
+  geom_point(
+    data = subset(md, PROTEASOME_AUC > threshold),
+    shape = 21, fill = NA, color = "#D62728", stroke = 0.2, size = 1.6, alpha = 0.9
+  ) +
+  labs(x = "S.Score", y = "G2M.Score") +
+  theme_classic() +
+  theme(
+    axis.title.x = element_text(size = 18),
+    axis.title.y = element_text(size = 18),
+    axis.text.x  = element_text(size = 14),
+    axis.text.y  = element_text(size = 14),
+    axis.ticks   = element_line(linewidth = 0.8),
+    axis.ticks.length = unit(0.25, "cm"),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  ) + theme(axis.line = element_line(linewidth = 0.5))
+dev.off()
+```
+
+## Viz of FullObject
+```{r}
+library(RColorBrewer)
+
+plotTheme <- theme(
+  text = element_text(size = 18),
+  axis.text.x = element_text(size = 16),
+  axis.text.y = element_text(size = 16),
+  legend.title = element_blank(),
+  panel.grid = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(color = "black")
+)
+
+x <- sort(unique(obj$subgroup))
+col <- colorRampPalette(brewer.pal(12, "Paired"))(length(x))
+names(col) <- x
+p<- DimPlot(obj, group.by = "subgroup", label = TRUE, cols = col) + plotTheme
+
+p1<-DimPlot(obj, group.by = "PROTEASOME_AUC_pos", label = F, cols = c("gray90", "firebrick")) + plotTheme
+
+
+pdf("RiemondyKA/PROTEASOMEperSUBGROUP.pdf", width = 13, height = 6)
+p + p1
+dev.off()
+
+nrow(obj@meta.data)
+```
+##-------------------
+## SHH workflow
+```{r}
+library(harmony)
+library(RColorBrewer)
+
+SHH <- subset(obj, subset = subgroup == "SHH" & coarse_cell_type == "malignant")
+DimPlot(SHH, group.by = "tumor_subpopulation")
+VlnPlot(SHH, features = "nUMI", group.by = "UPN")
+VlnPlot(SHH, features = "pMito", group.by = "UPN")
+## Re processing 
+DefaultAssay(SHH)<- "RNA"
+SHH <- NormalizeData(SHH)
+SHH <- FindVariableFeatures(SHH, nfeatures = 3000, selection.method = "vst", verbose = FALSE)
+SHH <- ScaleData(SHH, vars.to.regress = c("nUMI","pMito"),  features = VariableFeatures(SHH))
+
+seed <- 7081998
+SHH <- RunPCA(SHH, 
+              features = VariableFeatures(SHH),
+              verbose = FALSE, seed.use = seed,
+              weight.by.var = TRUE, ndims.print = 1:5, nfeatures.print = 30, npcs = 50, reduction.name = "pca")
+
+ElbowPlot(SHH, ndims = 50)
+
+SHH <- RunHarmony(SHH, group.by.vars = "UPN", theta = 1.5, plot_convergence = TRUE)
+Reductions(SHH)
+
+SHH <- RunUMAP(SHH, reduction = "harmony", dims = 1:30,
+               min.dist = 0.3, n.neighbors = 30L, seed.use = seed)
+SHH <- FindNeighbors(SHH, reduction = "harmony", dims = 1:30)
+SHH <- FindClusters(SHH, resolution = seq(0.1, 1.2, by = 0.1), algorithm = 1, n.iter = 1000, random.seed = seed)
+
+DimPlot(SHH, group.by = "tumor_subpopulation", label = T)
+DimPlot(SHH, group.by = "PROTEASOME_AUC_pos", label = T, cols = c("gray90", "firebrick"))
+DimPlot(SHH, group.by = "Phase", label = T)
+table(SHH$Human_CD15_AUC_pos, SHH$UPN)
+table(SHH$Human_CD15_AUC_pos, SHH$tumor_subpopulation)
+DimPlot(SHH, split.by = "UPN", label = T, group.by = "tumor_subpopulation")
+
+### vIZ
+DefaultAssay(SHH)<- "RNA"
+plotTheme <- theme(
+  text = element_text(size = 18),
+  axis.text.x = element_text(size = 16),
+  axis.text.y = element_text(size = 16),
+  legend.title = element_blank(),
+  panel.grid = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(color = "black")
+)
+##--- Viz 
+x <- sort(unique(SHH$tumor_subpopulation))
+col <- colorRampPalette(brewer.pal(12, "Paired"))(length(x))
+names(col) <- x
+p<- DimPlot(SHH, group.by = "tumor_subpopulation", label = TRUE, label.box = T, label.color = "white", cols = col) + plotTheme
+
+
+p1<-DimPlot(SHH, group.by = "PROTEASOME_AUC_pos", label = F, cols = c("gray90", "firebrick")) + plotTheme
+
+
+pdf("RiemondyKA/SHH/PROTEASOMEperSubp.pdf", width = 13, height = 6)
+p | p1
+dev.off()
+
+save(SHH, file = "RiemondyKA/SHH/SHH.RData")
+```
+
+##------------
+## G3 workflow
+```{r}
+GP3 <- subset(obj, subset = subgroup == "GP3" & coarse_cell_type == "malignant")
+DimPlot(GP3, group.by = "tumor_subpopulation")
+
+## Re processing 
+#GP3 <- NormalizeData(GP3)
+DefaultAssay(GP3)<- "RNA"
+GP3<- NormalizeData(GP3)
+GP3 <- FindVariableFeatures(GP3, nfeatures = 3000, selection.method = "vst", verbose = FALSE)
+VlnPlot(GP3, features = "nUMI", group.by = "UPN")
+GP3 <- ScaleData(GP3, vars.to.regress = c("nUMI","pMito"),  features = VariableFeatures(GP3))
+
+seed<- 7081998
+GP3 <- RunPCA(GP3, 
+              weight.by.var = TRUE, ndims.print = 1:5, nfeatures.print = 30, npcs = 50,reduction.name = "pca",
+              features = VariableFeatures(GP3), seed.use = seed)
+
+
+#DimPlot(SHH, group.by = "UPN")
+ElbowPlot(GP3, ndims = 50)
+
+GP3 <- RunHarmony(GP3, group.by.vars = "UPN", theta = 1.5, plot_convergence = TRUE)
+Reductions(GP3)
+
+GP3 <- RunUMAP(GP3, reduction = "harmony", dims = 1:30,
+               min.dist = 0.3, n.neighbors = 30L, seed.use = seed)
+GP3 <- FindNeighbors(GP3, reduction = "harmony", dims = 1:30, k.param = 20L)
+GP3 <- FindClusters(GP3, resolution = seq(0.1, 1.2, by = 0.1), algorithm = 1, n.iter = 1000, random.seed = seed)
+
+DimPlot(GP3, group.by = "tumor_subpopulation", label = T)
+DimPlot(GP3, group.by = "PROTEASOME_AUC_pos", label = T, cols = c("gray90", "firebrick"))
+DimPlot(GP3, group.by = "Phase", label = T)
+table(GP3$Human_CD15_AUC_pos, GP3$UPN)
+table(GP3$Human_CD15_AUC_pos, GP3$tumor_subpopulation)
+DimPlot(GP3, split.by = "UPN", label = T, group.by = "tumor_subpopulation")
+
+### Proteasome signature
+DefaultAssay(GP3)<- "RNA"
+## Viz
+plotTheme <- theme(
+  text = element_text(size = 18),
+  axis.text.x = element_text(size = 16),
+  axis.text.y = element_text(size = 16),
+  legend.title = element_blank(),
+  panel.grid = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(color = "black")
+)
+##--- Viz 
+x <- sort(unique(GP3$tumor_subpopulation))
+col <- colorRampPalette(brewer.pal(12, "Paired"))(length(x))
+names(col) <- x
+
+p<- DimPlot(GP3, group.by = "tumor_subpopulation", label = TRUE, label.box = T, label.color = "white", cols = col) + plotTheme
+
+p1<- DimPlot(GP3, group.by = "PROTEASOME_AUC_pos", label = F, cols = c("gray90", "firebrick")) + plotTheme
+
+
+pdf("RiemondyKA/GP3/PROTEASOMEperSubp.pdf", width = 13, height = 6)
+p | p1
+dev.off()
+
+
+save(GP3, file = "RiemondyKA/GP3/GP3.Rdata")
+```
+
+##------------
+## G4 workflow
+```{r}
+
+GP4 <- subset(obj, subset = subgroup == "GP4" & coarse_cell_type == "malignant")
+DimPlot(GP4, group.by = "tumor_subpopulation")
+
+## Re processing 
+#GP4 <- NormalizeData(GP4)
+DefaultAssay(GP4)<- "RNA"
+GP4<- NormalizeData(GP4)
+GP4 <- FindVariableFeatures(GP4, nfeatures = 3000, selection.method = "vst",verbose = FALSE)
+
+VlnPlot(GP4, features = "pMito", group.by = "UPN")
+GP4 <- ScaleData(GP4, features = VariableFeatures(GP4), vars.to.regress = c("nUMI","pMito"))
+
+seed <- 7081998
+GP4 <- RunPCA(GP4, 
+              features = VariableFeatures(GP4), seed.use = seed, verbose = FALSE,
+              weight.by.var = TRUE, ndims.print = 1:5, nfeatures.print = 30, npcs = 50,reduction.name = "pca")
+
+ElbowPlot(GP4, ndims = 50)
+
+GP4 <- RunHarmony(GP4, group.by.vars = "UPN", theta = 1.5, plot_convergence = TRUE)
+Reductions(GP4)
+
+GP4 <- RunUMAP(GP4, reduction = "harmony", dims = 1:30,
+               min.dist = 0.3, n.neighbors = 20L, seed.use = seed)
+
+GP4 <- FindNeighbors(GP4, reduction = "harmony", dims = 1:30)
+GP4 <- FindClusters(GP4, resolution = seq(0.1, 1.2, by = 0.1), algorithm = 1, n.iter = 1000, random.seed = seed)
+
+DimPlot(GP4, group.by = "tumor_subpopulation", label = T)
+DimPlot(GP4, group.by = "PROTEASOME_AUC_pos", label = T, cols = c("gray90", "firebrick"))
+DimPlot(GP4, group.by = "Phase", label = T)
+table(GP4$Human_CD15_AUC_pos, GP4$UPN)
+table(GP4$Human_CD15_AUC_pos, GP4$tumor_subpopulation)
+DimPlot(GP4, split.by = "UPN", label = T, group.by = "tumor_subpopulation")
+
+
+
+## Viz
+plotTheme <- theme(
+  text = element_text(size = 18),
+  axis.text.x = element_text(size = 16),
+  axis.text.y = element_text(size = 16),
+  legend.title = element_blank(),
+  panel.grid = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(color = "black")
+)
+##--- Viz 
+x <- sort(unique(GP4$tumor_subpopulation))
+col <- colorRampPalette(brewer.pal(12, "Paired"))(length(x))
+names(col) <- x
+p<- DimPlot(GP4, group.by = "tumor_subpopulation", label = TRUE, label.box = T, label.color = "white", cols = col) + plotTheme
+
+p1<- DimPlot(GP4, group.by = "PROTEASOME_AUC_pos", label = F, cols = c("gray90", "firebrick")) + plotTheme
+
+pdf("RiemondyKA/GP4/PROTEASOMEperSubp.pdf", width = 13, height = 6)
+p | p1
+dev.off()
+
+
+save(GP4, file = "RiemondyKA/GP4/GP4.Rdata")
+```
+
+##------------
+### Clusterdedogram 
+```{r}
+Idents(obj)<- obj$tumor_subpopulation
+obj<-BuildClusterTree(obj, dims = 1:30)  # choose dims you trust
+PlotClusterTree(obj)
+```
+
+##------------
+### Proprotion of CD15 + cells in each dataset per tumor subgroup
+```{r}
+load("RiemondyKA/SHH/SHH.RData")
+load("RiemondyKA/GP3/GP3.Rdata")
+load("RiemondyKA/GP4/GP4.Rdata")
+
+DefaultAssay(SHH)<- "RNA"
+DefaultAssay(GP3)<- "RNA"
+DefaultAssay(GP4)<- "RNA"
+
+table(SHH$PROTEASOME_AUC_pos, SHH$tumor_subpopulation)
+table(GP3$PROTEASOME_AUC_pos, GP3$tumor_subpopulation)
+table(GP4$PROTEASOME_AUC_pos, GP4$tumor_subpopulation)
+
+#---------------------------
+# cd15 + cells per subgroup
+## SHH medulloblastoma
+colnames(SHH@meta.data)
+Idents(SHH)<- SHH$tumor_subpopulation
+nClust <- length(unique(Idents(SHH)))# Setup color palette
+colCls <- colorRampPalette(brewer.pal(n = 10, name = "Paired"))(nClust)
+ggData = data.frame(prop.table(table(SHH$PROTEASOME_AUC_pos, SHH$tumor_subpopulation), margin = 2))
+colnames(ggData) = c("Proteasome_status", "Subpopulation", "value")
+p1 <- ggplot(ggData, aes(Subpopulation, value, fill = Proteasome_status)) +
+  geom_col() + xlab("Subpopulation") + ylab("Proportion of Cells (%)") +
+  scale_fill_manual(values = colCls)+ plotTheme + coord_flip()
+#pdf("Combined/Macrophages/Proportion_barplot.pdf", width = 8, height = 7)
+p1
+
+## GP3 medulloblastoma
+Idents(GP3)<- GP3$tumor_subpopulation
+nClust <- length(unique(Idents(GP3)))# Setup color palette
+colCls <- colorRampPalette(brewer.pal(n = 10, name = "Paired"))(nClust)
+ggData = data.frame(prop.table(table(GP3$PROTEASOME_AUC_pos, GP3$tumor_subpopulation), margin = 2))
+colnames(ggData) = c("Proteasome_status", "Subpopulation", "value")
+p2 <- ggplot(ggData, aes(Subpopulation, value, fill = Proteasome_status)) +
+  geom_col() + xlab("Subpopulation") + ylab("Proportion of Cells (%)") +
+  scale_fill_manual(values = colCls)+ plotTheme + coord_flip()
+#pdf("Combined/Macrophages/Proportion_barplot.pdf", width = 8, height = 7)
+p2
+
+## GP3 medulloblastoma
+Idents(GP4)<- GP4$tumor_subpopulation
+nClust <- length(unique(Idents(GP4)))# Setup color palette
+colCls <- colorRampPalette(brewer.pal(n = 10, name = "Paired"))(nClust)
+ggData = data.frame(prop.table(table(GP4$PROTEASOME_AUC_pos, GP4$tumor_subpopulation), margin = 2))
+colnames(ggData) = c("Proteasome_status", "Subpopulation", "value")
+p3 <- ggplot(ggData, aes(Subpopulation, value, fill = Proteasome_status)) +
+  geom_col() + xlab("Subpopulation") + ylab("Proportion of Cells (%)") +
+  scale_fill_manual(values = colCls)+ plotTheme + coord_flip()
+#pdf("Combined/Macrophages/Proportion_barplot.pdf", width = 8, height = 7)
+p3
+
+pdf("RiemondyKA/v2_Full_PROTEASOME_Proportion_barplot.pdf", width = 15, height = 5)
+p1 | p2 | p3
+dev.off()
+```
+### Refining visualizations for SHH, GP3 and GP4
+```{r}
+load("RiemondyKA/SHH/SHH.RData")
+load("RiemondyKA/GP3/GP3.Rdata")
+load("RiemondyKA/GP4/GP4.Rdata")
+```
+
+```{r UMAP viz}
+### Fixing populations for visualization
+library(RColorBrewer)
+
+plotTheme <- theme(
+  text = element_text(size = 18),
+  axis.text.x = element_text(size = 16),
+  axis.text.y = element_text(size = 16),
+  plot.title = element_blank(),       
+  legend.title = element_blank(),
+  panel.grid = element_blank(),
+  panel.background = element_blank(),
+  axis.line = element_line(color = "black")
+)
+# SHH
+Idents(SHH)<- SHH$tumor_subpopulation
+unique(SHH$tumor_subpopulation)
+SHH<- subset(SHH, subset = tumor_subpopulation != "SHH-X1")
+
+#GP4
+Idents(GP4)<- GP4$tumor_subpopulation
+unique(GP4$tumor_subpopulation)
+GP4 <- subset(GP4, subset = !tumor_subpopulation %in% c("GP4-X1", "GP4-X2", "GP4-X3"))
+
+
+### Viz fo Dimplots
+x <- sort(unique(SHH$tumor_subpopulation))
+col <- colorRampPalette(brewer.pal(12, "Paired"))(length(x))
+names(col) <- x
+p<- DimPlot(SHH, group.by = "tumor_subpopulation", label = TRUE, label.box = T, label.color = "white", cols = col) + plotTheme
+
+x <- sort(unique(GP3$tumor_subpopulation))
+col <- colorRampPalette(brewer.pal(12, "Paired"))(length(x))
+names(col) <- x
+q<- DimPlot(GP3, group.by = "tumor_subpopulation", label = TRUE, label.box = T, label.color = "white", cols = col) + plotTheme
+
+x <- sort(unique(GP4$tumor_subpopulation))
+col <- colorRampPalette(brewer.pal(12, "Paired"))(length(x))
+names(col) <- x
+r<- DimPlot(GP4, group.by = "tumor_subpopulation", label = TRUE, label.box = T, label.color = "white", cols = col) + plotTheme
+
+p | q | r
+
+
+### Proteasome signture visualization
+colnames(SHH@meta.data)
+a<- DimPlot(SHH,group.by = "PROTEASOME_AUC_pos",cols = c("FALSE" = "gray90", "TRUE" = "blue4")) + plotTheme
+b<- DimPlot(GP3,group.by = "PROTEASOME_AUC_pos",cols = c("FALSE" = "gray90", "TRUE" = "blue4")) + plotTheme
+c<- DimPlot(GP4,group.by = "PROTEASOME_AUC_pos",cols = c("FALSE" = "gray90", "TRUE" = "blue4")) + plotTheme
+
+
+pdf("RiemondyKA/Overal_UMAP_proteasome_signture.pdf", width = 12, height = 12)
+(p | a) / (q | b) / (r | c)
+dev.off()
+```
+```{r Pie chart of proportion of proteasome signtures}
+library(tastypie)
+#devtools::install_github("PaoloDalena/tastypie")
+DefaultAssay(SHH)<- "RNA"
+DefaultAssay(GP3)<- "RNA"
+DefaultAssay(GP4)<- "RNA"
+
+table(SHH$PROTEASOME_AUC_pos, SHH$tumor_subpopulation)
+table(GP3$PROTEASOME_AUC_pos, GP3$tumor_subpopulation)
+table(GP4$PROTEASOME_AUC_pos, GP4$tumor_subpopulation)
+
+## pie charts 
+#View(SHH@meta.data)
+Idents(SHH)<- SHH$subgroup
+Idents(GP3)<- GP3$subgroup
+Idents(GP4)<- GP4$subgroup
+
+SHH_ggData = data.frame(prop.table(table(SHH$PROTEASOME_AUC_pos, SHH$subgroup), margin = 2))
+SHH_ggData$Var2<- NULL
+
+GP3_ggData = data.frame(prop.table(table(GP3$PROTEASOME_AUC_pos, GP3$subgroup), margin = 2))
+GP3_ggData$Var2<- NULL
+
+GP4_ggData = data.frame(prop.table(table(GP4$PROTEASOME_AUC_pos, GP4$subgroup), margin = 2))
+GP4_ggData$Var2<- NULL
+
+pdf("RiemondyKA/PieProportion_SHH.pdf", width = 9, height = 6)
+pie_bake(data = SHH_ggData, template = "red1", perc = TRUE, title = "SHH", group_name = "Proteasome status")
+dev.off()
+pdf("RiemondyKA/PieProportion_GP3.pdf", width = 9, height = 6)
+pie_bake(data = GP3_ggData, template = "red1", perc = TRUE, title = "GP3", group_name = "Proteasome status")
+dev.off()
+pdf("RiemondyKA/PieProportion_GP4.pdf", width = 9, height = 6)
+pie_bake(data = GP4_ggData, template = "red1", perc = TRUE, title = "GP4", group_name = "Proteasome status")
+dev.off()
+```
+```{r Scatter plots for subgroups/subtype}
+## Adding trasncriptomic Cavalli subtypes to each object 
+metadata<- data.frame(UPN = unique(SHH$UPN),
+                      Cavalli_subtype = c("SHH alpha", "SHH beta", "SHH alpha",
+                                          "SHH delta", "SHH beta", "SHH beta",
+                                          "SHH beta", "SHH delta", "SHH delta"))
+SHH$Cavalli_subtype <- metadata$Cavalli_subtype[match(SHH$UPN, metadata$UPN)]
+View(SHH@meta.data)
+
+
+metadata<- data.frame(UPN = unique(GP3$UPN),
+                      Cavalli_subtype = c("GP3 gamma", "GP3 beta", "GP3 alpha",
+                                          "GP3 alpha", "GP3 alpha", "GP3 gamma"
+                                          ))
+GP3$Cavalli_subtype <- metadata$Cavalli_subtype[match(GP3$UPN, metadata$UPN)]
+View(GP3@meta.data)
+
+metadata<- data.frame(UPN = unique(GP4$UPN),
+                      Cavalli_subtype = c("GP4 beta", "GP4 beta", "GP4 beta",
+                                          "GP4 alpha", "GP4 beta",
+                                          "GP4 gamma", "GP4 gamma", "GP4 alpha",
+                                          "GP4 beta", "GP4 beta", "GP4 alpha"))
+GP4$Cavalli_subtype <- metadata$Cavalli_subtype[match(GP4$UPN, metadata$UPN)]
+View(GP4@meta.data)
+
+## Pie charts of proteasome signatures and Cavalli Subtypes
+y = data.frame(prop.table(table(SHH$PROTEASOME_AUC_pos, SHH$Cavalli_subtype), margin = 2))
+y<- y |> filter(Var1 == "TRUE")
+y$Var1<-  NULL
+p<- pie_bake(data = y, template = "basic4", perc = TRUE, title = "", group_name = "Cavalli subtype")
+
+y = data.frame(prop.table(table(GP3$PROTEASOME_AUC_pos, GP3$Cavalli_subtype), margin = 2))
+y<- y |> filter(Var1 == "TRUE")
+y$Var1<-  NULL
+q<- pie_bake(data = y, template = "basic4", perc = TRUE, title = "", group_name = "Cavalli subtype")
+
+y = data.frame(prop.table(table(GP4$PROTEASOME_AUC_pos, GP4$Cavalli_subtype), margin = 2))
+y<- y |> filter(Var1 == "TRUE")
+y$Var1<-  NULL
+r<- pie_bake(data = y, template = "basic4", perc = TRUE, title = "", group_name = "Cavalli subtype")
+
+
+p | q | r ##not as informative as I though it was gonna be 
+
+
+### Scatter plots with
+df_plot <- bind_rows(
+  SHH@meta.data %>% mutate(Group = "SHH"),
+  GP3@meta.data %>% mutate(Group = "GP3"),
+  GP4@meta.data %>% mutate(Group = "GP4")
+)
+
+### Anova posthoc 
+library(rstatix)
+stat.test <- aov(PROTEASOME_AUC ~ Group, data = df_plot) %>% tukey_hsd()
+
+pdf("RiemondyKA/Overall_proteasome_group_violin.pdf", height = 5)
+ggviolin(df_plot, x = "Group", y = "PROTEASOME_AUC",
+                color = "Group", palette =c("#0072B2", "#E69F00", "#009E73"),fill = "Group",
+                add = c("boxplot"), add.params = list(fill = "white"))  + 
+  stat_pvalue_manual(
+    stat.test, label = "p.adj.signif", 
+    y.position = c(0.5,0.5,0.55)
+      ) + 
+  ylab("Proteasome AUCell score") + theme_classic() +
+  theme(
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14)
+  ) +  
+  geom_hline(yintercept = 0.18, linetype = "dotted", color = "gray")
+dev.off()
+```
+```{r Scatter plots program A1 and GP3 A}
+df_plot <- bind_rows(
+  SHH@meta.data %>% filter(tumor_subpopulation %in% c("SHH-A1")) %>% mutate(Group = "SHH"),
+  GP3@meta.data %>% filter(tumor_subpopulation == "GP3-A") %>% mutate(Group = "GP3"),
+  GP4@meta.data %>% filter(tumor_subpopulation %in% c("GP4-A1")) %>% mutate(Group = "GP4")
+)
+
+stat.test <- aov(PROTEASOME_AUC ~ Group, data = df_plot) %>% tukey_hsd()
+
+pdf("RiemondyKA/Overall_proteasome_group_violin_cycling.pdf", height = 5)
+ggviolin(df_plot, x = "Group", y = "PROTEASOME_AUC",
+                color = "Group", palette =c("#0072B2", "#E69F00", "#009E73"),fill = "Group",
+                add = c("boxplot"), add.params = list(fill = "white"))  + 
+  stat_pvalue_manual(
+    stat.test, label = "p.adj.signif", 
+    y.position = c(0.5,0.5,0.55)
+      ) + 
+  ylab("Proteasome AUCell score (Cycling cells)") + theme_classic() +
+  theme(
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14)
+  ) +  
+  geom_hline(yintercept = 0.18, linetype = "dotted", color = "gray")
+dev.off()
+```
+```{r Cavalli subtypes}
+## SHH
+df_plot <- bind_rows(SHH@meta.data %>% mutate(Group = "SHH"))
+
+stat.test <- aov(PROTEASOME_AUC ~ Cavalli_subtype, data = df_plot) %>% tukey_hsd()
+pdf("RiemondyKA/Cavalli_Overall_proteasome_group_SHH.pdf", height = 5)
+ggviolin(df_plot, x = "Cavalli_subtype", y = "PROTEASOME_AUC",
+                color = "Cavalli_subtype", palette =c("#2F4B7C", "#BC5090", "#FFA600"),fill = "Cavalli_subtype",
+                add = c("boxplot"), add.params = list(fill = "white"))  + 
+  stat_pvalue_manual(
+    stat.test, label = "p.adj.signif", 
+    y.position = c(0.5,0.5,0.55)  
+      ) +   
+  ylab("Proteasome AUCell score") + theme_classic() +
+  theme(
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 14)
+  ) +  
+  geom_hline(yintercept = 0.18, linetype = "dotted", color = "gray")
+dev.off()
+
+
+## GP3
+df_plot <- bind_rows(GP3@meta.data %>% mutate(Group = "GP3"))
+unique(GP3$Cavalli_subtype)
+stat.test <- aov(PROTEASOME_AUC ~ Cavalli_subtype, data = df_plot) %>% tukey_hsd()
+pdf("RiemondyKA/Cavalli_Overall_proteasome_group_GP3.pdf", height = 5)
+ggviolin(df_plot, x = "Cavalli_subtype", y = "PROTEASOME_AUC",
+                color = "Cavalli_subtype", palette =c("#2F4B7C", "#BC5090", "#FFA600"),fill = "Cavalli_subtype",
+                add = c("boxplot"), add.params = list(fill = "white"))  + 
+  stat_pvalue_manual(
+    stat.test, label = "p.adj.signif", 
+    y.position = c(0.5,0.5,0.55)  
+      ) +   
+  ylab("Proteasome AUCell score") + theme_classic() +
+  theme(
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 14)
+  ) +  
+  geom_hline(yintercept = 0.18, linetype = "dotted", color = "gray")
+dev.off()
+
+## GP4
+df_plot <- bind_rows(GP4@meta.data %>% mutate(Group = "GP4"))
+unique(GP4$Cavalli_subtype)
+stat.test <- aov(PROTEASOME_AUC ~ Cavalli_subtype, data = df_plot) %>% tukey_hsd()
+pdf("RiemondyKA/Cavalli_Overall_proteasome_group_GP4.pdf", height = 5)
+ggviolin(df_plot, x = "Cavalli_subtype", y = "PROTEASOME_AUC",
+                color = "Cavalli_subtype", palette =c("#2F4B7C", "#BC5090", "#FFA600"),fill = "Cavalli_subtype",
+                add = c("boxplot"), add.params = list(fill = "white"))  + 
+  stat_pvalue_manual(
+    stat.test, label = "p.adj.signif", 
+    y.position = c(0.5,0.5,0.55)  
+      ) +   
+  ylab("Proteasome AUCell score") + theme_classic() +
+  theme(
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 14)
+  ) +  
+  geom_hline(yintercept = 0.18, linetype = "dotted", color = "gray")
+dev.off()
+```
+```{r Sox2 expression and proteasome expression }
+FeaturePlot(SHH, features = "PTCH1", min.cutoff = "q10", max.cutoff = "q95")
+VlnPlot(SHH,features = "PTCH1" )
+
+
+df_plot <- FetchData(SHH,
+  vars = c("SOX2", "PROTEASOME_AUC", "Cavalli_subtype", "Group", "tumor_subpopulation")
+)
+df_plot<- df_plot |> filter(SOX2 != 0 & tumor_subpopulation == "SHH-A1") #& PROTEASOME_AUC > 0.18
+df_plot<- df_plot |> filter(SOX2 != 0) #& PROTEASOME_AUC > 0.18
+
+cor.test(df_plot$SOX2, df_plot$PROTEASOME_AUC, method = "spearman")
+ggplot(df_plot, aes(x = SOX2, y = PROTEASOME_AUC)) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_classic() +
+  xlab("SOX2 expression") +
+  ylab("Proteasome AUCell score")
+```
+```{r SHH signature and proteasome signatures }
+library(clusterProfiler)
+library(AUCell)
+## loading signatures
+HALLMARK_HEDGEGOG<- read.gmt("HALLMARK_HEDGEHOG_SIGNALING.v2026.1.Hs.gmt")
+KEEG_HEDGEGOG<- read.gmt("KEGG_HEDGEHOG_SIGNALING_PATHWAY.v2026.1.Hs.gmt")
+
+DefaultAssay(SHH)<-"RNA"
+Idents(SHH)<- SHH$tumor_subpopulation
+DimPlot(SHH)
+
+## Addmodules scores
+hallmark_hh_genes <- unique(HALLMARK_HEDGEGOG$gene)
+kegg_hh_genes <- unique(KEEG_HEDGEGOG$gene)
+
+hallmark_hh_genes <- intersect(hallmark_hh_genes, rownames(SHH))
+kegg_hh_genes <- intersect(kegg_hh_genes, rownames(SHH))
+
+SHH <- AddModuleScore(object = SHH,features = list(hallmark_hh_genes),name = "HALLMARK_HEDGEHOG_Score")
+SHH <- AddModuleScore(object = SHH,features = list(kegg_hh_genes),name = "KEEG_HEDGEGOG_Score")
+
+FeaturePlot(SHH,features = "HALLMARK_HEDGEHOG_Score1",reduction = "umap", order = T)
+FeaturePlot(SHH,features = "KEEG_HEDGEGOG_Score1",reduction = "umap", order = T)
+
+View(SHH@meta.data)
+
+## CHECK CORRELATIONS
+df_plot <- FetchData(SHH,
+  vars = c("HALLMARK_HEDGEHOG_Score1", "KEEG_HEDGEGOG_Score1", "PROTEASOME_AUC", "Cavalli_subtype", "Group", "tumor_subpopulation")
+)
+
+#df_plot<- df_plot |> filter(SOX2 != 0 & tumor_subpopulation == "SHH-A1") #& PROTEASOME_AUC > 0.18
+#df_plot<- df_plot |> filter(SOX2 != 0) #& PROTEASOME_AUC > 0.18
+
+## CORRELATION OF HALLMARK VALUES
+cor.test(df_plot$HALLMARK_HEDGEHOG_Score1, df_plot$PROTEASOME_AUC, method = "spearman")
+ggplot(df_plot, aes(x = HALLMARK_HEDGEHOG_Score1, y = PROTEASOME_AUC)) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_classic() +
+  xlab("HALLMARK_HEDGEHOG") +
+  ylab("Proteasome AUCell score")
+
+## CORRELATION OF KEEG VALUES
+cor.test(df_plot$KEEG_HEDGEGOG_Score1, df_plot$PROTEASOME_AUC, method = "spearman")
+ggplot(df_plot, aes(x = KEEG_HEDGEGOG_Score1, y = PROTEASOME_AUC)) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_classic() +
+  xlab("KEEG_HEDGEGOG") +
+  ylab("Proteasome AUCell score")
+
+
+VlnPlot(SHH,features = "HALLMARK_HEDGEHOG_Score1",group.by = "tumor_subpopulation",pt.size = 0) + RotatedAxis()
+VlnPlot(SHH,features = "KEEG_HEDGEGOG_Score1",group.by = "tumor_subpopulation",pt.size = 0) + RotatedAxis()
+
+
+### TUMOR SUBPOPULATION 
+cor_by_subpop <- df_plot %>%
+  filter(
+    !is.na(HALLMARK_HEDGEHOG_Score1),
+    !is.na(PROTEASOME_AUC),
+    !is.na(tumor_subpopulation)
+  ) %>%
+  group_by(tumor_subpopulation) %>%
+  summarise(
+    n_cells = n(),
+    spearman_rho = cor(
+      HALLMARK_HEDGEHOG_Score1,
+      PROTEASOME_AUC,
+      method = "spearman"
+    ),
+    p_value = cor.test(
+      HALLMARK_HEDGEHOG_Score1,
+      PROTEASOME_AUC,
+      method = "spearman"
+    )$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(p_adj = p.adjust(p_value, method = "BH")) %>%
+  arrange(desc(spearman_rho))
+
+cor_labels <- cor_by_subpop %>%
+  mutate(
+    label = paste0(
+      "rho = ", round(spearman_rho, 2),
+      "\nFDR = ", signif(p_adj, 2)
+    )
+  )
+
+p<- ggplot(
+  df_plot,
+  aes(x = HALLMARK_HEDGEHOG_Score1, y = PROTEASOME_AUC)
+) +
+  geom_point(alpha = 0.35, size = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  geom_text(
+    data = cor_labels,
+    aes(x = -Inf, y = Inf, label = label),
+    inherit.aes = FALSE,
+    hjust = -0.1,
+    vjust = 1.1,
+    size = 3
+  ) +
+  facet_wrap(~ tumor_subpopulation, scales = "free", ncol = 4) +
+  theme_classic() +
+  xlab("HALLMARK Hedgehog") +
+  ylab("Proteasome AUCell score")
+
+pdf("RiemondyKA/HEDGEHOG_signaling/Per_population_correlation_proteasome.pdf", width = 8, height = 5)
+p
+dev.off()
+```
+
