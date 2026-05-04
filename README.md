@@ -1,3 +1,6 @@
 # Proteasome activity in SHH, GP3 and GP4 medulloblastoma
 
 1. Exploration of proteasome signature given by Thompson et al., and medulloblastoma
+2. Proteasome signature : https://pmc.ncbi.nlm.nih.gov/articles/PMC11107675/
+3. Cavalli and Griesinger dataset : https://gliovis.bioinfo.cnio.es/
+4. Single-cell RNA seq processed from 28 human childhood medulloblastoma: https://pmc.ncbi.nlm.nih.gov/articles/PMC8804892/
